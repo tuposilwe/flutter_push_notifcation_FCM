@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:http/http.dart' as http;
 
 import 'firebase_options.dart';
 
@@ -137,6 +140,9 @@ class _NotificationHomePageState extends State<NotificationHomePage> {
     final notification = message.notification;
     if (notification == null) return;
 
+    final imageUrl = notification.android?.imageUrl ?? notification.apple?.imageUrl;
+    final image = imageUrl == null ? null : await _downloadImage(imageUrl);
+
     await _localNotifications.show(
       id: notification.hashCode,
       title: notification.title,
@@ -148,10 +154,36 @@ class _NotificationHomePageState extends State<NotificationHomePage> {
           channelDescription: _channel.description,
           importance: Importance.high,
           priority: Priority.high,
+          styleInformation: image == null
+              ? null
+              : BigPictureStyleInformation(
+                  ByteArrayAndroidBitmap(image.bytes),
+                  largeIcon: ByteArrayAndroidBitmap(image.bytes),
+                ),
         ),
-        iOS: const DarwinNotificationDetails(),
+        iOS: DarwinNotificationDetails(
+          attachments: image == null ? null : [DarwinNotificationAttachment(image.path)],
+        ),
       ),
     );
+  }
+
+  /// Downloads the image and saves it to a temp file: the Android bitmap
+  /// style takes raw bytes, but the iOS attachment API only accepts a file path.
+  Future<({Uint8List bytes, String path})?> _downloadImage(String url) async {
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode != 200) return null;
+
+      final dir = await Directory.systemTemp.createTemp('fcm_image_');
+      final file = File('${dir.path}/image.jpg');
+      await file.writeAsBytes(response.bodyBytes);
+
+      return (bytes: response.bodyBytes, path: file.path);
+    } catch (e) {
+      debugPrint('Failed to download notification image: $e');
+      return null;
+    }
   }
 
   Future<void> _toggleTopic() async {
